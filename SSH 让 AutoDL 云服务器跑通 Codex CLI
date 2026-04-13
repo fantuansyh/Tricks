@@ -1,0 +1,433 @@
+# 在 macOS 本地代理环境下，通过 SSH 让 AutoDL 云服务器跑通 Codex CLI
+
+## 适用场景
+
+本文适用于下面这种情况：
+
+- 你的本地电脑是 **macOS**
+- 云服务器是 **AutoDL / SeetaCloud / Linux**
+- 本地已经有可用代理，例如：
+
+```bash
+export http_proxy=http://127.0.0.1:7897
+export https_proxy=http://127.0.0.1:7897
+```
+
+- 云服务器本身不能直接访问外网
+- 你希望在 **云服务器上运行 Codex CLI**
+- 你希望让云服务器的联网请求，经由 **SSH 隧道 -> 你本地 Mac 的代理** 转发出去
+
+这个方案的核心思路是：
+
+1. 在本地 Mac 上建立一条 **SSH 反向端口转发**
+2. 让云服务器把 `127.0.0.1:17897` 当成代理地址
+3. 在云服务器里用 `codex login --device-auth` 完成登录
+4. 之后直接在云服务器里运行 `codex`
+
+---
+
+## 一、整体思路
+
+假设你本地已经有一个代理：
+
+- 本地代理地址：`127.0.0.1:7897`
+
+我们要通过 SSH，把它映射成：
+
+- 云服务器上的代理入口：`127.0.0.1:17897`
+
+这样一来：
+
+- 云服务器访问 `127.0.0.1:17897`
+- 流量会通过 SSH 隧道回到你的 Mac
+- 再由你本地的代理 `127.0.0.1:7897` 出网
+
+最后，云服务器上像 `curl`、`pip`、`git`、`npm`、`codex` 这类支持代理的程序，就能借助本地代理联网。
+
+---
+
+## 二、前提条件
+
+### 1. 本地代理可用
+
+先在你的 Mac 上确认本地代理是通的：
+
+```bash
+curl -x http://127.0.0.1:7897 https://example.com -I
+```
+
+如果这一步都不通，后面的 SSH 转发也不会生效。
+
+### 2. 你已经能正常 SSH 登录云服务器
+
+例如：
+
+```bash
+ssh -p 24678 root@region-41.seetacloud.com
+```
+
+如果连普通 SSH 登录都不通，请先解决登录问题。
+
+### 3. 云服务器已安装 Codex CLI
+
+如果还没安装，可以在云服务器里执行：
+
+```bash
+npm install -g @openai/codex
+```
+
+或者：
+
+```bash
+brew install codex
+```
+
+安装完成后可测试：
+
+```bash
+codex --version
+```
+
+---
+
+## 三、步骤 1：在 Mac 上建立反向代理隧道
+
+在 **Mac 本地终端窗口 1** 里执行：
+
+```bash
+export http_proxy=http://127.0.0.1:7897
+export https_proxy=http://127.0.0.1:7897
+
+ssh -N \
+  -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=60 \
+  -o ServerAliveCountMax=3 \
+  -R 17897:127.0.0.1:7897 \
+  -p 24678 root@region-41.seetacloud.com
+```
+
+### 这条命令的作用
+
+它会在 **云服务器** 上开一个本地端口：
+
+```text
+127.0.0.1:17897
+```
+
+这个端口的流量会通过 SSH 隧道，被转发到你 **Mac 本地** 的：
+
+```text
+127.0.0.1:7897
+```
+
+### 为什么它看起来像“卡住了”？
+
+这是正常现象。
+
+因为这里用了：
+
+```bash
+ssh -N ...
+```
+
+`-N` 的意思是：
+
+> 只建立 SSH 隧道，不打开远程 shell
+
+所以它的正常表现就是：
+
+- 先让你输入 SSH 密码
+- 登录成功后
+- 一直停在前台，不返回命令提示符
+- 持续维持这条隧道
+
+**不要关闭这个窗口。**
+
+你可以把它理解成：
+
+- **窗口 1**：专门负责保持代理隧道在线
+
+---
+
+## 四、步骤 2：在第二个终端窗口登录云服务器
+
+再开一个 **Mac 本地终端窗口 2**，执行：
+
+```bash
+ssh -p 24678 root@region-41.seetacloud.com
+```
+
+登录成功后，进入云服务器 shell。
+
+---
+
+## 五、步骤 3：在云服务器里设置代理环境变量
+
+在云服务器里执行：
+
+```bash
+export http_proxy=http://127.0.0.1:17897
+export https_proxy=http://127.0.0.1:17897
+export HTTP_PROXY=http://127.0.0.1:17897
+export HTTPS_PROXY=http://127.0.0.1:17897
+export no_proxy=localhost,127.0.0.1
+```
+
+这里的关键点是：
+
+- **不是**再填你 Mac 的 `7897`
+- 而是填 **云服务器自己看到的代理入口** `127.0.0.1:17897`
+
+因为 `17897` 才是通过 SSH 隧道映射出来的那个远端代理端口。
+
+---
+
+## 六、步骤 4：验证云服务器是否已经能联网
+
+在云服务器里执行：
+
+```bash
+curl https://example.com -I
+```
+
+如果能正常返回 HTTP 响应头，说明：
+
+- 云服务器上的代理环境变量已经生效
+- SSH 隧道工作正常
+- 云服务器已经能借助你 Mac 本地代理出网
+
+也可以检查端口是否存在：
+
+```bash
+ss -lnt | grep 17897
+```
+
+如果有输出，通常说明这个端口已经在监听。
+
+---
+
+## 七、步骤 5：在云服务器里登录 Codex
+
+推荐使用 **Device Code 登录**。
+
+在云服务器里执行：
+
+```bash
+codex login --device-auth
+```
+
+终端会输出类似下面的信息：
+
+```text
+Welcome to Codex
+Follow these steps to sign in with ChatGPT using device code authorization:
+
+1. Open this link in your browser and sign in to your account
+2. Enter this one-time code
+```
+
+这时你要做的是：
+
+1. 在 **本地 Mac 浏览器** 里打开它给出的地址
+2. 登录你的 ChatGPT 账号
+3. 输入终端里显示的一次性验证码
+4. 等待服务器里的 Codex CLI 自动完成登录
+
+### 为什么推荐 Device Code 登录？
+
+因为你当前是在 **远程云服务器** 上运行 Codex，普通网页登录方式往往依赖本地浏览器回调，在这类远程环境中更容易遇到问题。  
+Device Code 更适合这种远程 / 无头环境。
+
+登录完成后，检查状态：
+
+```bash
+codex login status
+```
+
+如果已登录，就可以继续下一步。
+
+---
+
+## 八、步骤 6：启动 Codex
+
+在云服务器里直接运行：
+
+```bash
+codex
+```
+
+此时 Codex 就运行在云服务器上了，而它的联网请求会通过：
+
+- 云服务器 `127.0.0.1:17897`
+- SSH 反向隧道
+- 你的 Mac 本地代理 `127.0.0.1:7897`
+
+完成访问。
+
+---
+
+## 九、完整命令清单
+
+### Mac 窗口 1：建立反向代理隧道
+
+```bash
+export http_proxy=http://127.0.0.1:7897
+export https_proxy=http://127.0.0.1:7897
+
+ssh -N \
+  -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=60 \
+  -o ServerAliveCountMax=3 \
+  -R 17897:127.0.0.1:7897 \
+  -p 24678 root@region-41.seetacloud.com
+```
+
+### Mac 窗口 2：登录服务器
+
+```bash
+ssh -p 24678 root@region-41.seetacloud.com
+```
+
+### 云服务器里：设置代理、测试联网、登录 Codex
+
+```bash
+export http_proxy=http://127.0.0.1:17897
+export https_proxy=http://127.0.0.1:17897
+export HTTP_PROXY=http://127.0.0.1:17897
+export HTTPS_PROXY=http://127.0.0.1:17897
+export no_proxy=localhost,127.0.0.1
+
+curl https://example.com -I
+
+codex login --device-auth
+codex login status
+codex
+```
+
+---
+
+## 十、常见问题
+
+### 1. 为什么窗口 1 一直不退出？
+
+因为它在负责维持 SSH 隧道。
+
+只要这条命令没有报错，并且窗口一直被占用，通常就表示隧道还在工作。  
+这个窗口不要关。
+
+### 2. 为什么要用两个窗口？
+
+因为：
+
+- **窗口 1** 专门保活 SSH 反向隧道
+- **窗口 2** 才是真正登录服务器、执行命令的窗口
+
+如果你把窗口 1 关掉，云服务器上的 `127.0.0.1:17897` 就失效了。
+
+### 3. 为什么不能直接在云服务器里配本地代理 `127.0.0.1:7897`？
+
+因为 `127.0.0.1` 在不同机器上代表的是**各自本机**。
+
+- 在 Mac 上，`127.0.0.1:7897` 指的是 **Mac 本地代理**
+- 在云服务器上，`127.0.0.1:7897` 指的是 **云服务器自己**
+
+所以必须先通过 SSH 把本地代理映射成云服务器上的一个可访问端口，例如 `127.0.0.1:17897`。
+
+### 4. `codex login --device-auth` 登录后没反应怎么办？
+
+先等一会儿。  
+因为终端会等待你在浏览器里完成授权。
+
+如果你已经在浏览器里输入了验证码，但终端迟迟没有继续：
+
+- 检查云服务器代理是否已经配置正确
+- 检查窗口 1 的 SSH 隧道是否仍在运行
+- 再次执行 `codex login status` 看是否已成功登录
+
+### 5. 如果我不想用 Device Code 呢？
+
+你也可以使用 API key 登录，例如：
+
+```bash
+printenv OPENAI_API_KEY | codex login --with-api-key
+```
+
+不过在远程环境里，Device Code 往往更直接一些。
+
+### 6. 我想让代理变量永久生效怎么办？
+
+可以把这些配置追加到云服务器的 `~/.bashrc` 或 `~/.zshrc`：
+
+```bash
+export http_proxy=http://127.0.0.1:17897
+export https_proxy=http://127.0.0.1:17897
+export HTTP_PROXY=http://127.0.0.1:17897
+export HTTPS_PROXY=http://127.0.0.1:17897
+export no_proxy=localhost,127.0.0.1
+```
+
+保存后执行：
+
+```bash
+source ~/.bashrc
+```
+
+或者重新登录。
+
+不过要注意：  
+如果 SSH 隧道没有建立，这些代理变量即使存在也不会生效。
+
+---
+
+## 十一、安全提醒
+
+### 1. 不要把服务器密码贴到聊天、工单或公开文档里
+
+一旦贴出来，建议立即重置。
+
+### 2. 不要把 API key 明文提交到仓库
+
+如果使用 API key 登录，建议通过环境变量传递，不要写死在脚本或代码里。
+
+### 3. 这套方案依赖你的本地电脑在线
+
+因为云服务器实际是通过你的 Mac 本地代理出网。
+
+所以：
+
+- 你本地电脑断网，代理就失效
+- 你关闭窗口 1，SSH 隧道就断开
+- 隧道断开后，云服务器上的 Codex 联网能力也会中断
+
+---
+
+## 十二、结论
+
+这个方案的本质是：
+
+- **Codex 跑在云服务器**
+- **网络出口借用本地 Mac 代理**
+- **通过 SSH 反向端口转发把本地代理映射到远端**
+- **登录优先使用 Device Code，适合远程环境**
+
+如果你的目标是：
+
+> 在 AutoDL 服务器上使用 Codex CLI，但服务器自己无法直接访问外网
+
+那么这是一个比较直接、实用、且可复用的方案。
+
+---
+
+## 参考资料
+
+- OpenAI Codex CLI 文档  
+  https://developers.openai.com/codex/cli
+
+- OpenAI Codex Authentication 文档  
+  https://developers.openai.com/codex/auth
+
+- OpenAI Codex CLI 命令参考  
+  https://developers.openai.com/codex/cli/reference
+
+- OpenAI Codex Quickstart  
+  https://developers.openai.com/codex/quickstart
