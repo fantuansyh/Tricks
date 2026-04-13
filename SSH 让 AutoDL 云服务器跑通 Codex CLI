@@ -63,7 +63,7 @@ curl -x http://127.0.0.1:7897 https://example.com -I
 例如：
 
 ```bash
-ssh -p 24678 root@region-41.seetacloud.com
+ssh -p 端口号 用户名
 ```
 
 如果连普通 SSH 登录都不通，请先解决登录问题。
