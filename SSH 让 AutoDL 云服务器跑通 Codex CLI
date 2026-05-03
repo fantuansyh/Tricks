@@ -113,6 +113,14 @@ ssh -N \
   -p 59083 root@region-41.seetacloud.com
 ### 这条命令的作用
 
+ssh -N \
+  -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=60 \
+  -o ServerAliveCountMax=3 \
+  -R 17897:127.0.0.1:7897 \
+  -p 30470 root@sh01-ssh.gpuhome.cc 
+
+
 它会在 **云服务器** 上开一个本地端口：
 
 ```text
