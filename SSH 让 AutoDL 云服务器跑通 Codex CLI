@@ -186,6 +186,9 @@ export HTTPS_PROXY=http://127.0.0.1:17897
 export no_proxy=localhost,127.0.0.1
 ```
 
+export http_proxy=http://127.0.0.1:18097
+export https_proxy=http://127.0.0.1:18097
+
 这里的关键点是：
 
 - **不是**再填你 Mac 的 `7897`
@@ -318,7 +321,8 @@ codex
 ```
 
 ---
-
+export http_proxy=http://127.0.0.1:18097
+export https_proxy=http://127.0.0.1:18097
 ## 十、常见问题
 
 ### 1. 为什么窗口 1 一直不退出？
