@@ -120,8 +120,8 @@ ssh -N \
   -R 17897:127.0.0.1:7897 \
   -p 30470 root@sh01-ssh.gpuhome.cc 
 
-ssh -N \                               
-  -o ExitOnForwardFailure=yes \         
+ssh -N \
+  -o ExitOnForwardFailure=yes \
   -o ServerAliveInterval=60 \
   -o ServerAliveCountMax=3 \
   -R 18097:127.0.0.1:7897 \
